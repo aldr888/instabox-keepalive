@@ -4,11 +4,11 @@ name: instabox-keepalive
 # the official activity lease, rotates the run before maxRunMinutes, and
 # starts the machine again whenever it is suspended.
 #
-# GitHub's cron scheduler is unreliable for short intervals, so instead of
-# trusting each 5-minute tick we run one long job (5h30m, under the 6h job
-# limit) that renews the lease every 4 minutes. The cron only keeps a single
-# pending run queued: when the running job ends, the pending one starts
-# immediately and takes over, so coverage is continuous.
+# GitHub's cron scheduler never fired on this repository, so the schedule is
+# only a secondary starter. The primary mechanism is a chain: one long job
+# (5h30m, under the 6h job limit) renews the lease every four minutes and, at
+# the end, dispatches its own successor through the API. Coverage is
+# continuous with no human in the loop.
 on:
   schedule:
     - cron: "*/5 * * * *"
@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   group: instabox-keepalive
@@ -24,7 +25,7 @@ concurrency:
 jobs:
   keepalive:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
 
@@ -38,3 +39,49 @@ jobs:
             python3 keepalive.py || true
             sleep 240
           done
+
+      - name: Hand over to the next run
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json, os, time, urllib.request
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          tok = os.environ["GH_TOKEN"]
+          me = int(os.environ["GITHUB_RUN_ID"])
+          wf = "/repos/%s/actions/workflows/keepalive.yml" % repo
+
+          def api(path, method="GET", body=None):
+              data = json.dumps(body).encode() if body is not None else None
+              req = urllib.request.Request(
+                  "https://api.github.com" + path,
+                  data=data,
+                  method=method,
+                  headers={
+                      "Authorization": "Bearer " + tok,
+                      "Accept": "application/vnd.github+json",
+                      "Content-Type": "application/json",
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.loads(r.read() or b"{}")
+
+          runs = api(wf + "/runs?per_page=30")["workflow_runs"]
+          waiting = [r["id"] for r in runs
+                     if r["status"] in ("queued", "pending", "waiting") and r["id"] != me]
+          if waiting:
+              print("successor already queued:", waiting[0])
+              raise SystemExit(0)
+
+          for attempt in range(3):
+              try:
+                  api(wf + "/dispatches", "POST", {"ref": "main"})
+                  print("dispatched successor")
+                  raise SystemExit(0)
+              except Exception as exc:
+                  print("dispatch attempt %d failed: %s" % (attempt + 1, exc))
+                  time.sleep(20)
+          raise SystemExit(1)
+          PY
