@@ -1,8 +1,14 @@
 name: instabox-keepalive
 
-# Keeps an InstaBox free-tier machine awake from outside the sandbox:
-# renews the official activity lease, rotates the run before maxRunMinutes,
-# and starts the machine again whenever it is suspended.
+# Keeps an InstaBox free-tier machine awake from outside the sandbox: renews
+# the official activity lease, rotates the run before maxRunMinutes, and
+# starts the machine again whenever it is suspended.
+#
+# GitHub's cron scheduler is unreliable for short intervals, so instead of
+# trusting each 5-minute tick we run one long job (5h30m, under the 6h job
+# limit) that renews the lease every 4 minutes. The cron only keeps a single
+# pending run queued: when the running job ends, the pending one starts
+# immediately and takes over, so coverage is continuous.
 on:
   schedule:
     - cron: "*/5 * * * *"
@@ -18,21 +24,17 @@ concurrency:
 jobs:
   keepalive:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run keepalive
+      - name: Keep the machine awake
         env:
           INSTABOX_API_KEY: ${{ secrets.INSTABOX_API_KEY }}
           INSTABOX_MACHINE_ID: ${{ secrets.INSTABOX_MACHINE_ID }}
         run: |
-          set +e
-          rc=1
-          for attempt in 1 2 3; do
-            python3 keepalive.py
-            rc=$?
-            [ "$rc" -eq 0 ] && break
-            sleep 20
+          end=$((SECONDS + 19800))   # 5h30m
+          while [ "$SECONDS" -lt "$end" ]; do
+            python3 keepalive.py || true
+            sleep 240
           done
-          exit "$rc"
