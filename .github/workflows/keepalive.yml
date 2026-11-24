@@ -13,6 +13,11 @@ on:
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
+    inputs:
+      run_seconds:
+        description: "How long this job stays alive (default 5h30m); used to test the hand-over"
+        required: false
+        default: "19800"
 
 permissions:
   contents: read
@@ -33,8 +38,9 @@ jobs:
         env:
           INSTABOX_API_KEY: ${{ secrets.INSTABOX_API_KEY }}
           INSTABOX_MACHINE_ID: ${{ secrets.INSTABOX_MACHINE_ID }}
+          RUN_SECONDS: ${{ inputs.run_seconds }}
         run: |
-          end=$((SECONDS + 19800))   # 5h30m
+          end=$((SECONDS + ${RUN_SECONDS:-19800}))
           while [ "$SECONDS" -lt "$end" ]; do
             python3 keepalive.py || true
             sleep 240
