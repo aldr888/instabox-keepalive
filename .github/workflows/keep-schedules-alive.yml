@@ -1,0 +1,26 @@
+name: keep-schedules-alive
+
+# GitHub disables scheduled workflows in a repository that has seen no
+# activity for 60 days. This monthly commit keeps the keepalive schedule
+# enabled for as long as the repository exists.
+on:
+  schedule:
+    - cron: "17 3 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  touch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record a heartbeat commit
+        run: |
+          date -u +"%Y-%m-%dT%H:%M:%SZ monthly heartbeat" >> activity.log
+          git config user.name "keepalive-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add activity.log
+          git commit -m "chore: monthly heartbeat $(date -u +%Y-%m)"
+          git push
